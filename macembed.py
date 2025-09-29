@@ -75,19 +75,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-if __name__ == "__main__":
-    try:
-        import uvicorn
-        logger.info("Starting server with uvicorn on 0.0.0.0:8000")
-        uvicorn.run(app, host="0.0.0.0", port=8000)
-    except ImportError:
-        logger.warning("uvicorn not available, run with: uvicorn macembed:app --host 0.0.0.0 --port 8000")
-        uvicorn = None
-    except Exception as e:
-        logger.error(f"Failed to start server: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        sys.exit(1)
-
+# Pydantic models
 class EmbeddingRequest(BaseModel):
     model: Optional[str] = None
     input: Union[str, List[str]]
@@ -98,6 +86,17 @@ class RerankRequest(BaseModel):
     query: str
     documents: List[str]
     top_k: Optional[int] = None
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: Optional[str] = None
+    messages: List[ChatMessage]
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = 1.0
+    stream: Optional[bool] = False
 
 @app.get("/health")
 def health():
@@ -213,3 +212,65 @@ def rerank(req: RerankRequest, authorization: Optional[str] = Header(None)):
         logger.error(f"Error in rerank endpoint: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(500, f"Internal server error: {str(e)}")
+
+@app.post("/v1/chat/completions")
+def chat_completions(req: ChatCompletionRequest, authorization: Optional[str] = Header(None)):
+    """Minimal chat completions endpoint that returns a simple response"""
+    try:
+        logger.info(f"Chat completions request received with {len(req.messages)} messages")
+
+        if API_KEY and (not authorization or not authorization.startswith("Bearer ") or authorization.split(" ",1)[1] != API_KEY):
+            raise HTTPException(401, "Unauthorized")
+
+        # Extract the last user message or use a default
+        user_message = "Hello"
+        for msg in reversed(req.messages):
+            if msg.role == "user":
+                user_message = msg.content
+                break
+
+        # Return a minimal OpenAI-compatible response
+        return {
+            "id": "chatcmpl-placeholder",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": req.model or "macembed-chat",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": f"I'm a minimal chat endpoint. You said: {user_message[:100]}..."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in chat completions endpoint: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+# Handle OPTIONS requests for CORS
+@app.options("/v1/chat/completions")
+def chat_completions_options():
+    return {"message": "OK"}
+
+if __name__ == "__main__":
+    try:
+        import uvicorn
+        logger.info("Starting server with uvicorn on 0.0.0.0:8000")
+        uvicorn.run(app, host="0.0.0.0", port=8000)
+    except ImportError:
+        logger.warning("uvicorn not available, run with: uvicorn macembed:app --host 0.0.0.0 --port 8000")
+        uvicorn = None
+    except Exception as e:
+        logger.error(f"Failed to start server: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        sys.exit(1)
